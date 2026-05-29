@@ -26,8 +26,8 @@ function getConfigDir() {
   return process.env.OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode");
 }
 
-function getAgentsMdPath() {
-  return join(getConfigDir(), "AGENTS.md");
+function getAgentsMdPath(projectDir) {
+  return join(projectDir || getConfigDir(), "AGENTS.md");
 }
 
 async function initSession(sessionId, project) {
@@ -76,8 +76,8 @@ async function fetchContextFromWorker(project) {
   }
 }
 
-function injectContextIntoAgentsMd(context) {
-  const agentsMdPath = getAgentsMdPath();
+function injectContextIntoAgentsMd(context, projectDir) {
+  const agentsMdPath = getAgentsMdPath(projectDir);
   const configDir = getConfigDir();
 
   try {
@@ -120,7 +120,7 @@ export const OpenCodeMem = async (ctx) => {
   // Inject context on plugin load (session start)
   const context = await fetchContextFromWorker(projectName);
   if (context) {
-    injectContextIntoAgentsMd(context);
+    injectContextIntoAgentsMd(context, ctx.directory);
   }
 
   return {
