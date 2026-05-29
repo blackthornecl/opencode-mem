@@ -11,18 +11,21 @@ Based on [claude-mem](https://github.com/thedotmack/claude-mem) by Alex Newman.
 - **Memory Search** - Query your project history with `claude_mem_search` tool
 - **Session Summaries** - Automatic summarization when sessions go idle
 
-## Installation
+## Prerequisites
 
-### Prerequisites
+**claude-mem must be installed and running before using this plugin.**
 
-1. **claude-mem worker** must be running:
-   ```bash
-   npx claude-mem start
-   ```
+```bash
+# Install claude-mem globally
+npm install -g claude-mem
 
-2. **OpenCode** must be installed
+# Start the worker
+npx claude-mem start
+```
 
-### Install Plugin
+The plugin sends observations to claude-mem's worker (port 37700). Without it, observations cannot be stored.
+
+## Install Plugin
 
 ```bash
 # Copy plugin to OpenCode plugins directory
