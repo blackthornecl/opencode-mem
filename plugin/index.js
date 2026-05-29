@@ -137,23 +137,12 @@ export const OpenCodeMem = async (ctx) => {
       );
     },
 
-    // Capture assistant messages as observations
+    // Capture assistant messages as observations via message.updated bus event
     "chat.message": async (_input, output) => {
-      if (output?.message?.role !== "assistant") return;
-
-      const text = (output.parts || [])
-        .filter((p) => p.type === "text" && p.text)
-        .map((p) => p.text)
-        .join("\n");
-
-      if (!text) return;
-
-      const sessionId = `opencode-${output.message.sessionID || "unknown"}`;
-      await initSession(sessionId, projectName);
-      postObservation(sessionId, "assistant_message", {}, text, ctx.directory);
+      // This hook may not fire in OpenCode - fallback is in event handler
     },
 
-    // Handle session lifecycle events
+    // Handle session lifecycle and message events
     event: async ({ event }) => {
       if (event?.type === "session.idle") {
         const sessionID = event?.properties?.sessionID;
@@ -170,6 +159,24 @@ export const OpenCodeMem = async (ctx) => {
               }),
             });
           } catch (e) {}
+        }
+      }
+
+      // Capture assistant messages via message.updated bus event
+      if (event?.type === "message.updated") {
+        const data = event?.data;
+        if (data?.role === "assistant" && data?.content) {
+          const text = (data.content || [])
+            .filter((p) => p.type === "text" && p.text)
+            .map((p) => p.text)
+            .join("\n");
+
+          if (text) {
+            const sessionID = event?.properties?.sessionID || "unknown";
+            const sessionId = `opencode-${sessionID}`;
+            await initSession(sessionId, projectName);
+            postObservation(sessionId, "assistant_message", {}, text, ctx.directory);
+          }
         }
       }
     },
