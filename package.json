@@ -1,0 +1,18 @@
+{
+  "name": "opencode-mem",
+  "version": "1.0.0",
+  "description": "Persistent memory for OpenCode - captures tool usage and injects context into future sessions",
+  "main": "plugin/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "echo 'No build needed - plugin is plain JS'",
+    "install-plugin": "cp plugin/index.js ~/.config/opencode/plugins/opencode-mem.js"
+  },
+  "keywords": ["opencode", "memory", "context", "ai", "coding-agent"],
+  "author": "blackthornecl",
+  "license": "Apache-2.0",
+  "dependencies": {},
+  "peerDependencies": {
+    "opencode-ai": ">=1.0.0"
+  }
+}

@@ -1,0 +1,152 @@
+/**
+ * opencode-mem - Persistent memory plugin for OpenCode
+ *
+ * Based on claude-mem by Alex Newman (thedotmack)
+ * https://github.com/thedotmack/claude-mem
+ *
+ * Licensed under Apache License 2.0
+ * See LICENSE file for details
+ *
+ * This plugin captures tool usage observations and assistant messages,
+ * stores them in the claude-mem worker, and makes them available for
+ * future sessions via the claude_mem_search tool.
+ */
+
+const WORKER_PORT = process.env.CLAUDE_MEM_WORKER_PORT || "37700";
+const WORKER_URL = `http://127.0.0.1:${WORKER_PORT}`;
+const initialized = new Set();
+
+async function initSession(sessionId, project) {
+  if (initialized.has(sessionId)) return;
+  try {
+    await fetch(`${WORKER_URL}/api/sessions/init`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contentSessionId: sessionId,
+        project,
+        prompt: "",
+      }),
+    });
+    initialized.add(sessionId);
+  } catch (e) {
+    // Worker might not be running
+  }
+}
+
+async function postObservation(sessionId, toolName, toolInput, toolResponse, cwd) {
+  await initSession(sessionId, "opencode");
+  try {
+    await fetch(`${WORKER_URL}/api/sessions/observations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contentSessionId: sessionId,
+        tool_name: toolName,
+        tool_input: toolInput || {},
+        tool_response: String(toolResponse || "").slice(0, 1000),
+        cwd,
+      }),
+    });
+  } catch (e) {
+    // Worker might not be running
+  }
+}
+
+export const OpenCodeMem = async (ctx) => {
+  const projectName = ctx.project?.name || "opencode";
+
+  return {
+    // Capture every tool execution as an observation
+    "tool.execute.after": async (input, output) => {
+      const sessionId = `opencode-${input?.sessionID || "unknown"}`;
+      await initSession(sessionId, projectName);
+      postObservation(
+        sessionId,
+        input?.tool,
+        output?.args,
+        output?.output,
+        ctx.directory
+      );
+    },
+
+    // Capture assistant messages as observations
+    "chat.message": async (_input, output) => {
+      if (output?.message?.role !== "assistant") return;
+
+      const text = (output.parts || [])
+        .filter((p) => p.type === "text" && p.text)
+        .map((p) => p.text)
+        .join("\n");
+
+      if (!text) return;
+
+      const sessionId = `opencode-${output.message.sessionID || "unknown"}`;
+      await initSession(sessionId, projectName);
+      postObservation(sessionId, "assistant_message", {}, text, ctx.directory);
+    },
+
+    // Handle session lifecycle events
+    event: async ({ event }) => {
+      if (event?.type === "session.idle") {
+        const sessionID = event?.properties?.sessionID;
+        if (sessionID) {
+          const sessionId = `opencode-${sessionID}`;
+          await initSession(sessionId, projectName);
+          try {
+            await fetch(`${WORKER_URL}/api/sessions/summarize`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contentSessionId: sessionId,
+                last_assistant_message: "",
+              }),
+            });
+          } catch (e) {}
+        }
+      }
+    },
+
+    // Custom tool for searching memory
+    tool: {
+      claude_mem_search: {
+        description:
+          "Search claude-mem memory database for past observations, sessions, and context",
+        args: {
+          query: {
+            type: "string",
+            description: "Search query for memory observations",
+          },
+        },
+        async execute(args) {
+          const query = args.query || "";
+          if (!query) return "Please provide a search query.";
+
+          try {
+            const response = await fetch(
+              `${WORKER_URL}/api/search/observations?query=${encodeURIComponent(query)}&limit=10`
+            );
+
+            if (!response.ok) {
+              return "Worker not running. Start with: npx claude-mem start";
+            }
+
+            const data = await response.json();
+            const content = data.content || [];
+            const rendered = content
+              .filter((b) => b.type === "text")
+              .map((b) => b.text)
+              .join("\n")
+              .trim();
+
+            return rendered || `No results found for "${query}".`;
+          } catch (e) {
+            return "Worker not running. Start with: npx claude-mem start";
+          }
+        },
+      },
+    },
+  };
+};
+
+export default OpenCodeMem;
