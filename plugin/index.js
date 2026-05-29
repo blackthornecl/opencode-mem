@@ -12,9 +12,23 @@
  * future sessions via the claude_mem_search tool.
  */
 
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+
 const WORKER_PORT = process.env.CLAUDE_MEM_WORKER_PORT || "37700";
 const WORKER_URL = `http://127.0.0.1:${WORKER_PORT}`;
 const initialized = new Set();
+const AGENTS_MD_TAG_OPEN = "<claude-mem-context>";
+const AGENTS_MD_TAG_CLOSE = "</claude-mem-context>";
+
+function getConfigDir() {
+  return process.env.OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode");
+}
+
+function getAgentsMdPath() {
+  return join(getConfigDir(), "AGENTS.md");
+}
 
 async function initSession(sessionId, project) {
   if (initialized.has(sessionId)) return;
@@ -29,9 +43,7 @@ async function initSession(sessionId, project) {
       }),
     });
     initialized.add(sessionId);
-  } catch (e) {
-    // Worker might not be running
-  }
+  } catch (e) {}
 }
 
 async function postObservation(sessionId, toolName, toolInput, toolResponse, cwd) {
@@ -48,13 +60,68 @@ async function postObservation(sessionId, toolName, toolInput, toolResponse, cwd
         cwd,
       }),
     });
+  } catch (e) {}
+}
+
+async function fetchContextFromWorker(project) {
+  try {
+    const response = await fetch(
+      `${WORKER_URL}/api/context/inject?project=${encodeURIComponent(project)}`
+    );
+    if (!response.ok) return null;
+    const text = await response.text();
+    return text && text.trim() ? text : null;
   } catch (e) {
-    // Worker might not be running
+    return null;
   }
+}
+
+function injectContextIntoAgentsMd(context) {
+  const agentsMdPath = getAgentsMdPath();
+  const configDir = getConfigDir();
+
+  try {
+    mkdirSync(configDir, { recursive: true });
+  } catch (e) {}
+
+  let content = "";
+  if (existsSync(agentsMdPath)) {
+    try {
+      content = readFileSync(agentsMdPath, "utf-8");
+    } catch (e) {}
+  }
+
+  const tagStart = content.indexOf(AGENTS_MD_TAG_OPEN);
+  const tagEnd = content.indexOf(AGENTS_MD_TAG_CLOSE);
+
+  const contextBlock = `${AGENTS_MD_TAG_OPEN}\n${context}\n${AGENTS_MD_TAG_CLOSE}`;
+
+  if (tagStart !== -1 && tagEnd !== -1) {
+    content =
+      content.slice(0, tagStart) +
+      contextBlock +
+      content.slice(tagEnd + AGENTS_MD_TAG_CLOSE.length);
+  } else {
+    if (content.trim()) {
+      content = content.trimEnd() + "\n\n" + contextBlock + "\n";
+    } else {
+      content = `# Claude-Mem Memory Context\n\n${contextBlock}\n`;
+    }
+  }
+
+  try {
+    writeFileSync(agentsMdPath, content, "utf-8");
+  } catch (e) {}
 }
 
 export const OpenCodeMem = async (ctx) => {
   const projectName = ctx.project?.name || "opencode";
+
+  // Inject context on plugin load (session start)
+  const context = await fetchContextFromWorker(projectName);
+  if (context) {
+    injectContextIntoAgentsMd(context);
+  }
 
   return {
     // Capture every tool execution as an observation
