@@ -115,7 +115,9 @@ function injectContextIntoAgentsMd(context, projectDir) {
 }
 
 export const OpenCodeMem = async (ctx) => {
-  const projectName = ctx.project?.name || "opencode";
+  // Use directory as project identifier for per-project memory
+  const projectName = ctx.directory?.split("/").pop() || ctx.project?.name || "opencode";
+  writeFileSync("/tmp/claude-mem-project.txt", `project: ${projectName}\ndirectory: ${ctx.directory}\ntime: ${new Date().toISOString()}\n`);
 
   // Inject context on plugin load (session start)
   const context = await fetchContextFromWorker(projectName);
