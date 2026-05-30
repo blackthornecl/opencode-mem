@@ -126,17 +126,9 @@ export const OpenCodeMem = async (ctx) => {
   }
 
   return {
-    // Capture every tool execution as an observation
+    // Capture tool executions via tool.called bus event
     "tool.execute.after": async (input, output) => {
-      const sessionId = `opencode-${input?.sessionID || "unknown"}`;
-      await initSession(sessionId, projectName);
-      postObservation(
-        sessionId,
-        input?.tool,
-        output?.args,
-        output?.output,
-        ctx.directory
-      );
+      // Fallback - may not fire in OpenCode
     },
 
     // Capture assistant messages as observations via message.updated bus event
@@ -180,6 +172,21 @@ export const OpenCodeMem = async (ctx) => {
             postObservation(sessionId, "assistant_message", {}, text, ctx.directory);
           }
         }
+      }
+
+      // Capture tool executions via tool.called bus event
+      if (event?.type === "session.next.tool.success") {
+        const data = event?.data;
+        const sessionID = data?.sessionID || "unknown";
+        const sessionId = `opencode-${sessionID}`;
+        await initSession(sessionId, projectName);
+        postObservation(
+          sessionId,
+          data?.tool || "unknown",
+          data?.input || {},
+          JSON.stringify(data?.content || "").slice(0, 1000),
+          ctx.directory
+        );
       }
     },
 
