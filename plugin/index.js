@@ -12,13 +12,15 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
-writeFileSync("/tmp/opencode-mem-loaded.txt", `loaded at ${new Date().toISOString()}\n`);
-
 const WORKER_PORT = process.env.CLAUDE_MEM_WORKER_PORT || "37700";
 const WORKER_URL = `http://127.0.0.1:${WORKER_PORT}`;
 const initialized = new Set();
 const AGENTS_MD_TAG_OPEN = "<claude-mem-context>";
 const AGENTS_MD_TAG_CLOSE = "</claude-mem-context>";
+
+// Track context for better observations
+let lastUserMessage = "";
+let lastToolContext = {};
 
 function getConfigDir() {
   return process.env.OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode");
@@ -44,9 +46,17 @@ async function initSession(sessionId, project) {
   } catch (e) {}
 }
 
-async function postObservation(sessionId, toolName, toolInput, toolResponse, cwd) {
+async function postObservation(sessionId, toolName, toolInput, toolResponse, cwd, extraContext) {
   await initSession(sessionId, "opencode");
   try {
+    // Build richer context for the worker
+    const enrichedResponse = [
+      extraContext?.userIntent ? `User intent: ${extraContext.userIntent}` : "",
+      extraContext?.command ? `Command: ${extraContext.command}` : "",
+      extraContext?.filePath ? `File: ${extraContext.filePath}` : "",
+      `Output: ${toolResponse || ""}`,
+    ].filter(Boolean).join("\n");
+
     await fetch(`${WORKER_URL}/api/sessions/observations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -54,7 +64,7 @@ async function postObservation(sessionId, toolName, toolInput, toolResponse, cwd
         contentSessionId: sessionId,
         tool_name: toolName,
         tool_input: toolInput || {},
-        tool_response: String(toolResponse || "").slice(0, 1000),
+        tool_response: enrichedResponse.slice(0, 2000),
         cwd,
       }),
     });
@@ -112,6 +122,29 @@ function injectContextIntoAgentsMd(context, projectDir) {
   } catch (e) {}
 }
 
+function extractToolContext(tool) {
+  const context = {};
+
+  // Extract command from bash/shell tools
+  if (tool.state?.input?.command) {
+    context.command = tool.state.input.command;
+  }
+
+  // Extract file path from read/write/edit tools
+  if (tool.state?.input?.filePath) {
+    context.filePath = tool.state.input.filePath;
+  } else if (tool.state?.input?.path) {
+    context.filePath = tool.state.input.path;
+  }
+
+  // Use last user message as intent
+  if (lastUserMessage) {
+    context.userIntent = lastUserMessage.slice(0, 200);
+  }
+
+  return context;
+}
+
 export const Plugin = async (ctx) => {
   const projectName = ctx.directory?.split("/").pop() || ctx.project?.name || "opencode";
   writeFileSync("/tmp/opencode-mem-loaded.txt", `initialized at ${new Date().toISOString()}\nproject: ${projectName}\n`, { flag: "a" });
@@ -132,7 +165,8 @@ export const Plugin = async (ctx) => {
         input?.tool,
         output?.args,
         output?.output,
-        ctx.directory
+        ctx.directory,
+        { userIntent: lastUserMessage.slice(0, 200) }
       );
     },
 
@@ -142,18 +176,39 @@ export const Plugin = async (ctx) => {
       const data = event?.data;
       const sessionID = data?.sessionID || event?.properties?.sessionID;
 
+      // Track user messages for context
+      if (eventType === "message.updated" && data?.role === "user") {
+        const text = data.content || data.text || "";
+        if (text) {
+          lastUserMessage = text;
+        }
+      }
+
+      // Also capture from message.part.updated for user messages
+      if (eventType === "message.part.updated" && data?.part?.type === "text") {
+        const partText = data.part.text || "";
+        // Check if this is a user message by looking at messageID pattern
+        if (partText && !data.part?.tool) {
+          // Could be user or assistant - use last known context
+        }
+      }
+
       // Capture tool completions via message.part.updated
       if (eventType === "message.part.updated" && data?.part?.type === "tool") {
         const tool = data.part;
         if (tool.state?.status === "completed") {
           const sessionId = `opencode-${sessionID}`;
           await initSession(sessionId, projectName);
+
+          const toolContext = extractToolContext(tool);
+
           postObservation(
             sessionId,
             tool.name || tool.tool,
             tool.state.input,
-            JSON.stringify(tool.state.content || "").slice(0, 1000),
-            ctx.directory
+            JSON.stringify(tool.state.content || "").slice(0, 2000),
+            ctx.directory,
+            toolContext
           );
         }
       }
@@ -164,7 +219,9 @@ export const Plugin = async (ctx) => {
         if (text) {
           const sessionId = `opencode-${sessionID}`;
           await initSession(sessionId, projectName);
-          postObservation(sessionId, "assistant_message", {}, text.slice(0, 1000), ctx.directory);
+          postObservation(sessionId, "assistant_message", {}, text.slice(0, 2000), ctx.directory, {
+            userIntent: lastUserMessage.slice(0, 200),
+          });
         }
       }
 
