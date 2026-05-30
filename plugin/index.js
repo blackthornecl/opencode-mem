@@ -18,6 +18,7 @@ const AGENTS_MD_TAG_OPEN = "<claude-mem-context>";
 const AGENTS_MD_TAG_CLOSE = "</claude-mem-context>";
 
 let lastUserMessage = "";
+let lastAssistantMessage = "";
 
 function getConfigDir() {
   return process.env.OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode");
@@ -52,7 +53,10 @@ async function postObservation(sessionId, toolName, toolInput, toolResponse, cwd
       `Input: ${JSON.stringify(toolInput || {}).slice(0, 1000)}`,
       ``,
       `## Tool Output`,
-      (toolResponse || "").slice(0, 3000),
+      (toolResponse || "").slice(0, 2000),
+      ``,
+      `## Assistant Analysis`,
+      lastAssistantMessage ? lastAssistantMessage.slice(0, 1000) : "No analysis yet",
     ].join("\n");
 
     const res = await fetch(`${WORKER_URL}/api/sessions/observations`, {
@@ -121,6 +125,11 @@ export const Plugin = async (ctx) => {
 
       if (event?.type === "message.updated" && data?.role === "user") {
         lastUserMessage = data.content || data.text || "";
+      }
+
+      // Track assistant messages for context
+      if (event?.type === "message.updated" && data?.role === "assistant") {
+        lastAssistantMessage = data.content || data.text || "";
       }
 
       if (event?.type === "message.part.updated" && data?.part?.type === "tool") {
