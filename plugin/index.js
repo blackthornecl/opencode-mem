@@ -6,10 +6,6 @@
  *
  * Licensed under Apache License 2.0
  * See LICENSE file for details
- *
- * This plugin captures tool usage observations and assistant messages,
- * stores them in the claude-mem worker, and makes them available for
- * future sessions via the claude_mem_search tool.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
@@ -81,7 +77,7 @@ function injectContextIntoAgentsMd(context, projectDir) {
   const configDir = getConfigDir();
 
   try {
-    mkdirSync(configDir, { recursive: true });
+    mkdirSync(projectDir || configDir, { recursive: true });
   } catch (e) {}
 
   let content = "";
@@ -114,29 +110,30 @@ function injectContextIntoAgentsMd(context, projectDir) {
   } catch (e) {}
 }
 
-export const OpenCodeMem = async (ctx) => {
-  // Use directory as project identifier for per-project memory
+export const Plugin = async (ctx) => {
   const projectName = ctx.directory?.split("/").pop() || ctx.project?.name || "opencode";
-  writeFileSync("/tmp/claude-mem-project.txt", `project: ${projectName}\ndirectory: ${ctx.directory}\ntime: ${new Date().toISOString()}\n`);
 
-  // Inject context on plugin load (session start)
+  // Inject context on plugin load
   const context = await fetchContextFromWorker(projectName);
   if (context) {
     injectContextIntoAgentsMd(context, ctx.directory);
   }
 
   return {
-    // Capture tool executions via tool.called bus event
+    // Capture tool executions via event hook
     "tool.execute.after": async (input, output) => {
-      // Fallback - may not fire in OpenCode
+      const sessionId = `opencode-${input?.sessionID || "unknown"}`;
+      await initSession(sessionId, projectName);
+      postObservation(
+        sessionId,
+        input?.tool,
+        output?.args,
+        output?.output,
+        ctx.directory
+      );
     },
 
-    // Capture assistant messages as observations via message.updated bus event
-    "chat.message": async (_input, output) => {
-      // This hook may not fire in OpenCode - fallback is in event handler
-    },
-
-    // Handle session lifecycle and message events
+    // Handle all events
     event: async ({ event }) => {
       const eventType = event?.type;
       const data = event?.data;
@@ -226,5 +223,3 @@ export const OpenCodeMem = async (ctx) => {
     },
   };
 };
-
-export default OpenCodeMem;
