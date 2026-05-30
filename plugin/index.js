@@ -12,6 +12,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
+writeFileSync("/tmp/opencode-mem-loaded.txt", `loaded at ${new Date().toISOString()}\n`);
+
 const WORKER_PORT = process.env.CLAUDE_MEM_WORKER_PORT || "37700";
 const WORKER_URL = `http://127.0.0.1:${WORKER_PORT}`;
 const initialized = new Set();
@@ -112,6 +114,7 @@ function injectContextIntoAgentsMd(context, projectDir) {
 
 export const Plugin = async (ctx) => {
   const projectName = ctx.directory?.split("/").pop() || ctx.project?.name || "opencode";
+  writeFileSync("/tmp/opencode-mem-loaded.txt", `initialized at ${new Date().toISOString()}\nproject: ${projectName}\n`, { flag: "a" });
 
   // Inject context on plugin load
   const context = await fetchContextFromWorker(projectName);
