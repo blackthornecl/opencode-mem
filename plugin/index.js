@@ -138,55 +138,50 @@ export const OpenCodeMem = async (ctx) => {
 
     // Handle session lifecycle and message events
     event: async ({ event }) => {
-      if (event?.type === "session.idle") {
-        const sessionID = event?.properties?.sessionID;
-        if (sessionID) {
+      const eventType = event?.type;
+      const data = event?.data;
+      const sessionID = data?.sessionID || event?.properties?.sessionID;
+
+      // Capture tool completions via message.part.updated
+      if (eventType === "message.part.updated" && data?.part?.type === "tool") {
+        const tool = data.part;
+        if (tool.state?.status === "completed") {
           const sessionId = `opencode-${sessionID}`;
           await initSession(sessionId, projectName);
-          try {
-            await fetch(`${WORKER_URL}/api/sessions/summarize`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contentSessionId: sessionId,
-                last_assistant_message: "",
-              }),
-            });
-          } catch (e) {}
+          postObservation(
+            sessionId,
+            tool.name || tool.tool,
+            tool.state.input,
+            JSON.stringify(tool.state.content || "").slice(0, 1000),
+            ctx.directory
+          );
         }
       }
 
-      // Capture assistant messages via message.updated bus event
-      if (event?.type === "message.updated") {
-        const data = event?.data;
-        if (data?.role === "assistant" && data?.content) {
-          const text = (data.content || [])
-            .filter((p) => p.type === "text" && p.text)
-            .map((p) => p.text)
-            .join("\n");
-
-          if (text) {
-            const sessionID = event?.properties?.sessionID || "unknown";
-            const sessionId = `opencode-${sessionID}`;
-            await initSession(sessionId, projectName);
-            postObservation(sessionId, "assistant_message", {}, text, ctx.directory);
-          }
+      // Capture assistant text via message.part.updated
+      if (eventType === "message.part.updated" && data?.part?.type === "text") {
+        const text = data.part.text;
+        if (text) {
+          const sessionId = `opencode-${sessionID}`;
+          await initSession(sessionId, projectName);
+          postObservation(sessionId, "assistant_message", {}, text.slice(0, 1000), ctx.directory);
         }
       }
 
-      // Capture tool executions via tool.called bus event
-      if (event?.type === "session.next.tool.success") {
-        const data = event?.data;
-        const sessionID = data?.sessionID || "unknown";
+      // Session idle - summarize
+      if (eventType === "session.idle" && sessionID) {
         const sessionId = `opencode-${sessionID}`;
         await initSession(sessionId, projectName);
-        postObservation(
-          sessionId,
-          data?.tool || "unknown",
-          data?.input || {},
-          JSON.stringify(data?.content || "").slice(0, 1000),
-          ctx.directory
-        );
+        try {
+          await fetch(`${WORKER_URL}/api/sessions/summarize`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contentSessionId: sessionId,
+              last_assistant_message: "",
+            }),
+          });
+        } catch (e) {}
       }
     },
 
