@@ -42,25 +42,35 @@ async function initSession(sessionId, project) {
 async function postObservation(sessionId, toolName, toolInput, toolResponse, cwd) {
   await initSession(sessionId, "opencode");
   try {
-    const enriched = [
-      lastUserMessage ? `User asked: ${lastUserMessage.slice(0, 200)}` : "",
+    // Build rich context for better AI summaries
+    const context = [
+      `## User Request`,
+      lastUserMessage || "No specific request",
+      ``,
+      `## Tool Execution`,
       `Tool: ${toolName}`,
-      `Input: ${JSON.stringify(toolInput || {}).slice(0, 500)}`,
-      `Output: ${(toolResponse || "").slice(0, 1500)}`,
-    ].filter(Boolean).join("\n");
+      `Input: ${JSON.stringify(toolInput || {}).slice(0, 1000)}`,
+      ``,
+      `## Tool Output`,
+      (toolResponse || "").slice(0, 3000),
+    ].join("\n");
 
-    await fetch(`${WORKER_URL}/api/sessions/observations`, {
+    const res = await fetch(`${WORKER_URL}/api/sessions/observations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contentSessionId: sessionId,
         tool_name: toolName,
         tool_input: toolInput || {},
-        tool_response: enriched.slice(0, 2000),
+        tool_response: context.slice(0, 4000),
         cwd,
       }),
     });
-  } catch (e) {}
+    const data = await res.json();
+    writeFileSync("/tmp/opencode-mem-post.txt", `posted: ${toolName} -> ${JSON.stringify(data)}\n`, { flag: "a" });
+  } catch (e) {
+    writeFileSync("/tmp/opencode-mem-post.txt", `error: ${e.message}\n`, { flag: "a" });
+  }
 }
 
 async function fetchContextFromWorker(project) {
